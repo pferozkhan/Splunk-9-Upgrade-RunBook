@@ -1,0 +1,375 @@
+# Splunk 9 Upgrade Runbook
+
+Pre Requisites
+==============
+The following is a list of important elements that you must consider before upgrading to Splunk Enterprise 9.0 and its components.
+Migrate your App Key Value Store (KVSTORE) storage engine from the Memory Mapped (MMAP) storage engine to the WiredTiger storage engine, and update your MongoDB version from 3.6 to 4.2. These updates are required and mandatory for Splunk Enterprise 9.0
+Back up your App Key Value Store (KV Store) databases prior to starting an upgrade.
+Adjust your scripts and templates to use Python 3-compatible syntax before you upgrade. Use the Splunk Products version compatibility matrix to ensure that any premium Splunk apps and add-ons you run are compatible with version 9.0. If they are not, do not upgrade until compatible versions become available.
+Data Fabric Search (DFS) and all associated server-side components are removed. Upgrading to Splunk Enterprise 9.0 removes DFS functionality.
+Upgrading Splunk Enterprise directly to version 9.0 is only supported from versions 8.1.x and higher. Upgrading a universal forwarder directly to version 9.0 is supported from versions 8.1.x and higher.
+If you run version 7.1 and lower of Splunk Enterprise, you must stop Splunk Enterprise instances first.
+If you run Linux machines that use the second extended (ext2) file system, upgrade that file system to third extended (ext3) prior to starting an upgrade.
+
+Migrate the KV store storage engine
+===================================
+Splunk Enterprise versions 9.0 and higher require the WiredTiger storage engine and server version 4.2, which significantly reduces the amount of storage you need and improves performance. Migrate to WiredTiger either before or during upgrade to Splunk Enterprise 9.0, and then upgrade to server version 4.2.
+All Splunk Enterprise versions 8.1 and higher support WiredTiger, so you can consider migrating to WiredTiger before your upgrade to reduce downtime during the upgrade. If you prefer to perform the WiredTiger migration and the upgrade to Splunk Enterprise at separate times, check the Splunk documentation for your current version of Splunk Enterprise to complete your migration before initiating your upgrade to Splunk Enterprise 9.0 or higher.
+To migrate your KV store storage engine during your upgrade to Splunk Enterprise 9.0 or higher, first determine your deployment type.
+If your single instance of the KV store is located on a search head, the cluster manager, or any indexer node, you have a single-instance KV store deployment. 
+Go to  “Migrate the KVSTORE in a single-instance deployment” in the below github page
+If you have multiple KV store nodes across a search head cluster, then you have a clustered KV store deployment.
+Go to “Migrate the KVSTORE in a clustered deployment” in the below github page
+After completing your migration to WiredTiger and server version 4.2, you can optionally remove the unsupported binary files for previous versions of MongoDB.
+
+Migrate the KV store in a single-instance deployment
+====================================================
+Single-instance deployments of Splunk Enterprise 9.0 and higher are automatically migrated to the WiredTiger storage engine and the latest version of MongoDB, server version 4.2, during the upgrade.
+Complete any prompts during your Splunk Enterprise upgrade.
+
+Verify that you have the latest version of the storage engine after upgrade with the following command:
+$ /opt/splunk/bin/splunk show kvstore-status --verbose
+
+Verify that the serverVersion and storageEngine fields indicate the latest versions:
+serverVersion : 4.2.17
+[...]
+storageEngine : wiredTiger
+
+Note: In Unix operating systems, the latest server version is 4.2.17. In Windows operating systems, the latest server version is 4.2.19.
+
+Troubleshooting Steps
+=====================
+Set your library path
+If your instance fails to automatically migrate to WiredTiger and the latest version of Mongo DB during upgrade, you might need to set or correct your library path. If you receive the following error message, consider setting your library path:
+/opt/splunk/bin/mongodump: error while loading shared libraries: libssl.so.1.0.0: cannot open shared object file: No such file or directory
+
+If that does not fix the migration to WiredTiger, migrate manually using the below steps
+
+Migrate manually to the latest version of Mongo DB
+==================================================
+If your instance fails at automatically migrating to WiredTiger and to the latest version of Mongo DB, manually upgrade to the latest version of Mongo DB with the following steps:
+
+Take a backup of your KVSTORE
+
+In the CLI, run the splunk show kvstore-status command.
+$ /opt/splunk/bin/splunk show kvstore-status --verbose
+
+Ensure that the backupRestoreStatus field and the status field are both in the ready state.
+
+If you are running any searches that use outputlookup with the default append=f parameter, end them or allow them to complete before taking a backup, or the backup fails.
+
+Create a separate folder for your backup directory, so that the backup is preserved if the $SPLUNK_DB/kvstore directory fails.
+
+Stop the Splunk instance using the below command
+/opt/splunk/bin/splunk stop
+
+Use the below command from any search head.
+/opt/splunk/bin/splunk backup kvstore -pointInTime true
+
+This creates an archive file in the $SPLUNK_DB/kvstorebackup directory. You must use the -pointInTime true portion of the command to back up with consistency.
+
+If the above command fails for some reason, use the below steps
+
+Stop the splunk instance,
+
+tar the $SPLUNK_DB/mongo directory to /opt
+$ tar -zvcf /opt/kvstore-bkup-<date>.tar.gz /opt/splunk/var/lib/splunk/kvstore/mongo
+Note: the KVSTORE clean up process will remove all files under     
+                      “/opt/splunk/var/lib/splunk/kvstore/”. So it is recommended to take the backup of the
+                      KVSTORE outside of $SPLUNK_HOME
+
+Manually migrate the KVSTORE using the below command
+$ /opt/splunk/bin/splunk migrate migrate-kvstore
+
+Start the Splunk instance using the below command
+$ /opt/splunk/bin/splunk start
+
+Check the KVSTORE status, using the below command
+$ /opt/splunk/bin/splunk show kvstore-status --verbose
+
+If for some reason, splunk instance still fails at migrating to WiredTiger and to the latest version of Mongo DB, follow the below steps.
+
+Stop the Splunk instance using the below command
+$ /opt/splunk/bin/splunk stop
+
+Take a backup of your KVSTORE (like mentioned in the above steps, if not already taken)
+
+Run the below command to clean your existing KVSTORE
+$ /opt/splunk/bin/splunk clean kvstore --local
+
+Start the Splunk instance using the below command
+$ /opt/splunk/bin/splunk start
+
+Check the KVSTORE status, using the below command
+$ /opt/splunk/bin/splunk show kvstore-status --verbose
+
+Migrate the KV store in a clustered deployment
+===============================================
+Avoid any of the following actions right before or during migration:
+If you are running any searches on a KV store node when you begin migrating, that search might fail. Searches that start running after you begin migration are not impacted.
+Do not do any heavy writes to the KV store while the migration is in progress.
+Do not add new search heads while the migration is in progress.
+Complete the following steps to prepare your deployment before you migrate your storage engine:
+Plan sufficient time for your upgrade and migration. The time it takes to migrate the KV store storage engine is proportional to the total data in your KV store.
+Back up your KV store data before you begin the migration process. The KV store non-captain nodes are synced from the captain on a rolling basis, one node at a time, and the migration process does not automatically back up KV store data to a separate location.
+After your upgrade completes, Splunk Enterprise prompts you to upgrade your storage engine immediately to WiredTiger.
+
+Use the below curl command to stop the migration process at any time.
+$ curl -k -u admin:changeme -X POST https://localhost:8089/services/shcluster/captain/kvmigrate/stop
+ 
+Initiate your KV store storage engine migration
+
+If not already taken, back up the KV store 
+Note: In a search head cluster deployment, only one backup operation can take place at a time. If you initiate a backup on more than one search head at the same time, only one backup succeeds.
+
+To take your KVSTORE backup, use the below backup command:
+$ /opt/splunk/bin/splunk backup kvstore [-pointInTime <true|false>] [-cancel <true|false>] [-parallel Collections <num>] [-archiveName <archive>]
+
+After you take your backup, check that your instance is ready to migrate by using the below commands.
+$ /opt/splunk/bin/splunk start-shcluster-migration kvstore -storageEngine wiredTiger -isDryRun true
+
+Resolve any issues blocking migration. Perform the migration only if all checks pass.
+
+Initiate the migration from any node with the following command. Migrate based on specific URIs. Specify their names and the management port number. If you specify neither option, then all nodes are migrated on a rolling basis one at a time.
+$ /opt/splunk/bin/splunk splunk start-shcluster-migration kvstore -storageEngine wiredTiger - peersList "https://server1:8089,https://server2:8089,https://server3:8089"
+
+During migration is in progress, you can use any of several methods to monitor your migration and verify that it is complete.
+
+To check which nodes are currently migrating, use the following commands.
+$ /opt/splunk/bin/splunk show shcluster-kvmigration-status
+
+To check the progress of the migration of a cluster member, see the KVStoreReplicaSetStats entry in the $SPLUNK_HOME/var/log/introspection/kvstore.log file on *nix, or the %SPLUNK_HOME\var\log\introspection\kvstore.log file on Windows, on that member. This status updates every 30 seconds.
+
+If you backed up your KV store, verify that the migration is successful and then delete the KV store backup data.
+
+Upgrade to MongoDB version 4.2, by completing the following steps
+
+Check that your instance is ready to migrate with the following command:
+$ /opt/splunk/bin/splunk start-shcluster-upgrade kvstore -version 4.2 -isDryRun true
+
+Resolve any issues blocking migration. Perform the migration only if all checks pass.
+
+Use the following commands to initiate the KVSTORE upgrade
+$ /opt/splunk/bin/splunk start-shcluster-upgrade kvstore -version 4.2
+
+Verify that you have the latest version of the storage engine after upgrade with one of the following commands:
+$ /opt/splunk/bin/splunk show kvstore-status –verbose
+
+Check the output to see that the serverVersion and storageEngine fields indicate the latest versions:
+serverVersion : 4.2.17
+[...]
+storageEngine : wiredTiger
+In Unix operating systems, the latest server version is 4.2.17. In Windows operating systems, the latest server version is 4.2.19.
+
+Remove unsupported binary files for lower server versions. (Optional)
+
+After you complete your migration to the WiredTiger storage engine and server version 4.2, you can choose to remove the unsupported binary files for MongoDB version 3.6. Removing these files is optional. Complete the following steps to remove the files:
+
+Verify that you have the latest version of the storage engine with the following command:
+$ /opt/splunk/bin/splunk show kvstore-status –verbose
+
+Verify that the serverVersion and storageEngine fields indicate the latest versions:
+serverVersion : 4.2.17
+[...]
+storageEngine : wiredTiger
+
+In Unix operating systems, the latest server version is 4.2.17. In Windows operating systems, the latest server version is 4.2.19.
+
+Delete the following files from the $SPLUNK_HOME/bin directory:
+mongod-3.6
+mongod-4.0
+mongodump-3.6
+mongorestore-3.6
+
+After you remove these files and restart your instance, you can ignore the following message. You don't need to take any action.
+03-25-2022 12:34:18.203 -0700 WARN  InstalledFilesHashChecker [3769773 LazyGlobalManifestCheck] - An installed file="/Users/pchandhar/splunk-code/develop/SI/bin/mongod-3.6" did not pass hash-checking due to reason="file missing"
+
+
+To Perform Splunk Upgrade
+=========================
+
+Perform a single instance upgrade [Standalone Splunk Instance]
+==============================================================
+Ensure compatibility of Splunk product upgrade paths that are available from previous versions of Splunk Enterprise.
+Login into the host running Splunk.
+Either copy using sftp or download the new Splunk package using WGET.
+Stop the splunk instance.
+$ /opt/splunk/bin/splunk stop
+Verify Splunk status, using the below commend.
+$ /opt/splunk/bin/splunk status
+Take a backup of $SPLUNK_HOME/etc
+Note: when restoring this backup,
+Restore any custom apps & config settings from $SPLUNK_HOME/etc/system or $SPLUNK_HOME/etc/apps, if needed.
+This has to be done after the upgrade process completion and needs a restart.
+Upgrade the Splunk instance, using the below steps.
+Extract the new Splunk package to /opt folder, (in *.nix) using the below command:
+If using tar
+$ tar -xvzf <new-Splunk-Package.tar.gz> -C /opt
+If using rpm
+$ rpm -i <new-Splunk-Package.rpm>
+Make sure the Splunk folder is owned by splunk:splunk.
+         $ ls -ll /opt
+If not, use the below command to change the group and ownership to splunk
+As root, go to /opt
+Run the below command:
+$ chown -R splunk:splunk splunk
+Make sure the group and ownership to splunk folder is now splunk:splunk
+$ ls -ll /opt
+Start the Splunk instance with --accept-license.
+$ /opt/splunk/bin/splunk start --accept-license
+Splunk will identify this is an upgrade and will display the following output.
+This appears to be an upgrade of Splunk.
+--------------------------------------------------------------------------------
+Splunk has detected an older version of Splunk installed on this machine. To finish upgrading to the new version, Splunk's installer will automatically update and alter your current configuration files. Deprecated 
+configuration files will be renamed with a deprecated extension. You can choose to preview the changes 
+that will be made to your configuration files before proceeding with the migration and upgrade:
+If you want to migrate and upgrade without previewing the changes that will be made to your existing 
+configuration files, choose 'y'.
+If you want to see what changes will be made before you proceed with the upgrade, choose 'n'.
+Perform migration and upgrade without previewing configuration changes? [y/n]
+
+Enter [Y or N] and Splunk will start upgrading the binaries appropriately.
+
+Verify Splunk status, using the below commend.
+$ /opt/splunk/bin/splunk status
+
+Perform a rolling upgrade of an indexer cluster
+===============================================
+
+Splunk Enterprise version 7.1.0 and higher supports rolling upgrade for indexer clusters. Rolling upgrade lets you perform a phased upgrade of indexer peers with minimal interruption to your ongoing searches. You can use rolling upgrade to minimize search disruption when upgrading peer nodes to a new version of Splunk Enterprise.
+
+Requirements and considerations
+===============================
+Review the following requirements and considerations before you initiate a rolling upgrade:
+
+Rolling upgrade only applies to upgrades from version 7.1.x to a higher version of Splunk Enterprise.
+
+The manager node and all peer nodes must be running version 7.1.0 or higher.
+
+All search heads and search head clusters must be running version 7.1.0 or higher.
+
+Do not attempt any clustering maintenance operations, such as rolling restart, bundle pushes, or node additions, during upgrade.
+
+You cannot run the below operations simultaneously, when doing a phased upgrade:
+
+Data rebalance
+Excess bucket removal
+Rolling restart
+Rolling upgrade
+
+If you trigger one of the above operations while another one is already running, splunkd.log, the CLI, and Splunk Web all surface an error that shows a conflicting operation is in progress.
+
+How a rolling upgrade works
+When you initiate a rolling upgrade, you select a peer and take it offline. During the offline process, the manager node reassigns bucket primaries to other peers to retain the searchable state, and the peer completes any in-progress searches within a configurable timeout.
+After the manager node shuts down the peer, you perform the software upgrade and bring the peer back online, at which point the peer rejoins the cluster. You repeat this process for each peer node until the rolling upgrade is complete. Disable deferred scheduled searches
+By default, during rolling upgrade, continuous scheduled searches are deferred until after the upgrade is complete, based on the default defer_scheduled_searchable_idxc attribute in savedsearches.conf. Real-time scheduled searches are deferred regardless of this setting.
+
+You can disable this default behavior so that continuous scheduled searches are not deferred, using the below steps:
+
+On the search head, if not already there, create a file under 
+$SPLUNK_HOME/etc/system/local/savedsearches.conf.
+
+Set defer_scheduled_searchable_idxc to false.
+[default]
+defer_scheduled_searchable_idxc = false
+
+Restart Splunk.
+
+Note: When defer_scheduled_searchable_idxc is disabled, scheduled saved searches might return partial results
+
+To Perform a rolling upgrade
+=============================
+To upgrade an indexer cluster with minimal search interruption, perform the following steps:
+
+1. Run preliminary health checks
+On the manager node, run the splunk show cluster-status command with the verbose option to confirm the cluster is in a searchable state:
+
+$ /opt/splunk/bin/splunk show cluster-status --verbose
+ This command shows information about the cluster state. Review the command output to confirm that the search factor is met and all data is searchable before you initiate the rolling upgrade.
+
+Note: The cluster must have atleast two searchable copies of each bucket to be in a searchable state for a rolling upgrade
+
+Here is an example of the output from the splunk show cluster-status --verbose command:
+
+splunk@manager1:~/bin$ ./splunk show cluster-status --verbose
+Pre-flight check successful .................. YES
+ ├────── Replication factor met ............... YES
+ ├────── Search factor met .................... YES
+ ├────── All data is searchable ............... YES
+ ├────── All peers are up ..................... YES
+ ├────── CM version is compatible ............. YES
+ ├────── No fixup tasks in progress ........... YES
+ └────── Splunk version peer count { 7.1.0: 3 }
+
+ Indexing Ready YES
+
+ idx1          0026D1C6-4DDB-429E-8EC6-772C5B4F1DB5           default
+                  Searchable YES
+                  Status  Up
+                  Bucket Count=14
+                  Splunk Version=7.1.0 
+idx3          31E6BE71-20E1-4F1C-8693-BEF482375A3F            default
+                  Searchable YES
+                  Status  Up
+                  Bucket Count=14
+                  Splunk Version=7.1.0 
+ idx2          81E52D67-6AC6-4C5B-A528-4CD5FEF08009            default
+                  Searchable YES
+                  Status  Up
+                  Bucket Count=14
+                  Splunk Version=7.1.0 
+
+The output shows that the health check is successful, which indicates the cluster is in a searchable state to perform a rolling upgrade.
+
+2. Upgrade the manager node
+Login into the Manager node
+Upgrade the Manager node (Perform a single instance upgrade [Standalone Splunk Instance])
+Use the manager node dashboard to verify that all cluster nodes are up and running.
+
+3. Upgrade the search head tier
+To perform a member-by-member upgrade:
+Upgrade one member and make it a captain:
+Stop the member.
+Upgrade the member (Perform a single instance upgrade [Standalone Splunk Instance]).
+Start the member and wait while it joins the cluster.
+Transfer captaincy to the upgraded member.
+For each additional member, one-by-one:
+Stop the member.
+Upgrade the member (Perform a single instance upgrade [Standalone Splunk Instance]).
+Start the member.
+Upgrade the deployer:
+Stop the deployer.
+Upgrade the deployer (Perform a single instance upgrade [Standalone Splunk Instance]).
+Start the deployer.
+
+4. Initialize rolling upgrade for Indexer Peer nodes
+Run the below command on the manager node:
+$ /opt/splunk/bin/splunk upgrade-init cluster-peers
+Note: This initializes the rolling upgrade and puts the cluster in maintenance mode.
+
+5. Take the peer offline
+Run the below command on the peer node:
+$ /opt/splunk/bin/splunk offline
+
+Note: The manager node reassigns bucket primaries, completes any ongoing searches, and then shuts down the peer.
+
+Note: Taking multiple peers offline simultaneously can impact searches.
+
+6. Upgrade the peer node
+Stop a peer node.
+Upgrade the peer node (Perform a single instance upgrade [Standalone Splunk Instance]).
+Start the peer node and wait while it joins the cluster.
+The peer node starts and automatically rejoins the cluster.
+
+7. Validate version upgrade
+Validate the version upgrade
+
+8. Repeat steps 5-7
+Repeat steps 5-7 until upgrade of all peer nodes is complete.
+
+9. Finalize rolling upgrade
+Run the following CLI command on the manager node:
+
+$ /opt/splunk/bin/splunk upgrade-finalize cluster-peers
+
+This completes the upgrade process and takes the cluster out of maintenance mode.
